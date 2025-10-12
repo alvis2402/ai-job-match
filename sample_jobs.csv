@@ -1,0 +1,6 @@
+id,title,description,location
+1,Data Engineer,"Build data pipelines and ETL jobs using Python and SQL","Remote"
+2,Machine Learning Engineer,"Develop ML models, evaluation, and deployment with PyTorch or TensorFlow","San Francisco, CA"
+3,Backend Software Engineer,"Design and implement RESTful APIs in Node.js or Python","New York, NY"
+4,Frontend Developer,"Create responsive UIs using React and modern JavaScript","Remote"
+5,AI Researcher,"Work on language models, experiments, and research papers","Boston, MA"
