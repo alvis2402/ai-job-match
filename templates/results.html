@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Matches</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Roboto, Arial;
+        padding: 2rem;
+      }
+      .card {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 1.5rem;
+        border: 1px solid #eee;
+        border-radius: 8px;
+      }
+      .job {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .score {
+        float: right;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Top Matches</h1>
+      <p>Results for <strong>{{ filename }}</strong></p>
+      {% if matches|length == 0 %}
+      <p>No matches found.</p>
+      {% else %} {% for m in matches %}
+      <div class="job">
+        <div class="score">{{ m.score }}</div>
+        <div><strong>{{ m.title }}</strong></div>
+        <div>{{ m.location }}</div>
+      </div>
+      {% endfor %} {% endif %}
+
+      <p style="margin-top: 1rem">
+        <a href="{{ url_for('index') }}">Upload another resume</a>
+      </p>
+    </div>
+  </body>
+</html>
