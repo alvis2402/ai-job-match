@@ -4,6 +4,12 @@ from werkzeug.utils import secure_filename
 import pandas as pd
 from utils.text_utils import clean_text, simple_match_score
 from utils.resume_parser import parse_resume
+# optional embeddings integration
+try:
+    from utils.embeddings import ensure_job_embeddings, rank_jobs_by_embedding
+    HF_AVAILABLE = True
+except Exception:
+    HF_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -18,6 +24,19 @@ except Exception as e:
     print(f"Warning: failed to read {JOBS_CSV}: {e}")
     jobs_df = pd.DataFrame(columns=["id", "title", "description", "location"]) 
 
+# If Hugging Face key is present, precompute job embeddings (cached) so ranking by
+# embeddings can be used on uploads. If anything fails, we'll simply fall back to
+# the existing keyword scorer.
+JOB_EMB_CACHE = {}
+EMBEDDING_MODEL = os.environ.get("HF_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+if HF_AVAILABLE and os.environ.get("HUGGINGFACE_API_KEY"):
+    try:
+        JOB_EMB_CACHE = ensure_job_embeddings(jobs_df, model=EMBEDDING_MODEL)
+        print(f"Loaded job embeddings for {len(JOB_EMB_CACHE)} jobs using model {EMBEDDING_MODEL}")
+    except Exception as e:
+        print(f"Warning: failed to prepare job embeddings: {e}")
+        JOB_EMB_CACHE = {}
+
 @app.route("/jobs", methods=["GET"])
 def list_jobs():
     """Return all jobs (simple JSON)."""
@@ -27,7 +46,7 @@ def list_jobs():
 @app.route("/", methods=["GET"])
 def index():
     """Render main page with upload form."""
-    return render_template("index.html")
+    return render_template("index.html", HUGGINGFACE_AVAILABLE=(HF_AVAILABLE and bool(os.environ.get("HUGGINGFACE_API_KEY"))), HF_MODEL=EMBEDDING_MODEL)
 
 
 def score_jobs_from_resume_text(resume_text, top=5):
@@ -38,7 +57,7 @@ def score_jobs_from_resume_text(resume_text, top=5):
     for _, row in jobs_df.iterrows():
         title = row.get("title", "") or ""
         desc = row.get("description", "") or ""
-        # score both title and description
+        # score both title and description using adjustable weights (defaults match prior behavior)
         score_title = simple_match_score(title, resume_text)
         score_desc = simple_match_score(desc, resume_text)
         score = 0.4 * score_title + 0.6 * score_desc
@@ -75,7 +94,91 @@ def upload_resume():
 
     # compute top matches
     top = int(request.form.get("top", 5))
-    matches = score_jobs_from_resume_text(text, top=top)
+    # ranking method: 'keywords', 'embeddings', or 'hybrid'
+    method = request.form.get("method", "auto")
+    # weights for title/description (used by keyword scoring)
+    try:
+        title_w = float(request.form.get("title_weight", 0.4))
+        desc_w = float(request.form.get("description_weight", 0.6))
+    except Exception:
+        title_w, desc_w = 0.4, 0.6
+    # hybrid alpha: 0.0 -> keywords only, 1.0 -> embeddings only
+    try:
+        hybrid_alpha = float(request.form.get("hybrid_alpha", 0.5))
+    except Exception:
+        hybrid_alpha = 0.5
+
+    matches = []
+
+    def keyword_scores(res_text, topn=5):
+        results = []
+        for _, row in jobs_df.iterrows():
+            title = row.get("title", "") or ""
+            desc = row.get("description", "") or ""
+            score_title = simple_match_score(title, res_text)
+            score_desc = simple_match_score(desc, res_text)
+            score = title_w * score_title + desc_w * score_desc
+            results.append({
+                "id": row.get("id"),
+                "title": title,
+                "location": row.get("location"),
+                "score": score,
+            })
+        return sorted(results, key=lambda r: r["score"], reverse=True)[:topn]
+
+    # Determine actual mode: if method == auto, prefer embeddings when available
+    if method == "auto":
+        if HF_AVAILABLE and JOB_EMB_CACHE:
+            actual = "embeddings"
+        else:
+            actual = "keywords"
+    else:
+        actual = method
+
+    if actual == "embeddings":
+        if HF_AVAILABLE and JOB_EMB_CACHE:
+            try:
+                matches = rank_jobs_by_embedding(text, jobs_df, JOB_EMB_CACHE, top=top, model=EMBEDDING_MODEL)
+                for m in matches:
+                    m["score"] = round(m.get("score", 0.0), 4)
+            except Exception as e:
+                print(f"Warning: embedding-based ranking failed: {e}")
+                matches = keyword_scores(text, top)
+        else:
+            matches = keyword_scores(text, top)
+    elif actual == "hybrid":
+        # compute both and combine
+        kw = keyword_scores(text, topn=len(jobs_df))
+        emb = []
+        if HF_AVAILABLE and JOB_EMB_CACHE:
+            try:
+                emb = rank_jobs_by_embedding(text, jobs_df, JOB_EMB_CACHE, top=len(jobs_df), model=EMBEDDING_MODEL)
+            except Exception as e:
+                print(f"Warning: embedding ranking failed for hybrid mode: {e}")
+                emb = []
+        # map id -> score
+        kw_map = {str(d["id"]): d["score"] for d in kw}
+        emb_map = {str(d["id"]): d["score"] for d in emb}
+        combined = []
+        for _, row in jobs_df.iterrows():
+            jid = str(row.get("id"))
+            kw_s = kw_map.get(jid, 0.0)
+            emb_s = emb_map.get(jid, 0.0)
+            score = (1 - hybrid_alpha) * kw_s + hybrid_alpha * emb_s
+            combined.append({
+                "id": row.get("id"),
+                "title": row.get("title"),
+                "location": row.get("location"),
+                "score": score,
+            })
+        matches = sorted(combined, key=lambda r: r["score"], reverse=True)[:top]
+        for m in matches:
+            m["score"] = round(m.get("score", 0.0), 4)
+    else:
+        # keywords
+        matches = keyword_scores(text, top)
+        for m in matches:
+            m["score"] = round(m.get("score", 0.0), 4)
     return render_template("results.html", matches=matches, filename=filename)
 
 @app.route("/match", methods=["GET"])

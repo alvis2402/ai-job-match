@@ -30,7 +30,9 @@
     <div class="card">
       <h1>Top Matches</h1>
       <p>Results for <strong>{{ filename }}</strong></p>
-      {% if matches|length == 0 %}
+      {% if request.form.method %}
+      <p>Ranking method: <strong>{{ request.form.method }}</strong></p>
+      {% endif %} {% if matches|length == 0 %}
       <p>No matches found.</p>
       {% else %} {% for m in matches %}
       <div class="job">
