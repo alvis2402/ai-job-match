@@ -228,10 +228,21 @@ def match_jobs():
         return jsonify({"error": "missing query parameter 'q'"}), 400
     top = int(request.args.get("top", 5))
 
+    # Optional weights for title/description passed as query params. Server-side
+    # sanitize and normalize so they sum to 1 and are clamped to [0,1]. This
+    # makes the endpoint robust to clients that don't normalize.
+    title_w_raw = request.args.get("title_weight", None)
+    desc_w_raw = request.args.get("description_weight", None)
+    title_w, desc_w = _sanitize_and_normalize_weights(title_w_raw, desc_w_raw)
+
     results = []
     for _, row in jobs_df.iterrows():
-        score = simple_match_score(row.get("description", ""), q)
-        results.append({"id": row.get("id"), "title": row.get("title"), "location": row.get("location"), "score": score})
+        title = row.get("title", "") or ""
+        desc = row.get("description", "") or ""
+        score_title = simple_match_score(title, q)
+        score_desc = simple_match_score(desc, q)
+        score = title_w * score_title + desc_w * score_desc
+        results.append({"id": row.get("id"), "title": row.get("title"), "location": row.get("location"), "score": round(score, 4)})
 
     results = sorted(results, key=lambda r: r["score"], reverse=True)[:top]
     return jsonify(results)
