@@ -71,6 +71,42 @@ def score_jobs_from_resume_text(resume_text, top=5):
     return results
 
 
+def _sanitize_and_normalize_weights(title_w, desc_w):
+    """Clamp title and description weights to [0,1] and normalize so they sum to 1.
+    If both are zero or invalid, return defaults (0.4, 0.6).
+    """
+    try:
+        t = float(title_w)
+    except Exception:
+        t = None
+    try:
+        d = float(desc_w)
+    except Exception:
+        d = None
+    if t is None and d is None:
+        return 0.4, 0.6
+    if t is None:
+        t = 0.0
+    if d is None:
+        d = 0.0
+    # clamp
+    t = max(0.0, min(1.0, t))
+    d = max(0.0, min(1.0, d))
+    s = t + d
+    if s == 0:
+        return 0.4, 0.6
+    return t / s, d / s
+
+
+def _sanitize_alpha(alpha):
+    try:
+        a = float(alpha)
+    except Exception:
+        return 0.5
+    # clamp to [0,1]
+    return max(0.0, min(1.0, a))
+
+
 @app.route("/upload", methods=["POST"])
 def upload_resume():
     """Handle resume upload (expects form field 'resume')."""
@@ -97,16 +133,15 @@ def upload_resume():
     # ranking method: 'keywords', 'embeddings', or 'hybrid'
     method = request.form.get("method", "auto")
     # weights for title/description (used by keyword scoring)
-    try:
-        title_w = float(request.form.get("title_weight", 0.4))
-        desc_w = float(request.form.get("description_weight", 0.6))
-    except Exception:
-        title_w, desc_w = 0.4, 0.6
+    title_w_raw = request.form.get("title_weight", 0.4)
+    desc_w_raw = request.form.get("description_weight", 0.6)
+    title_w, desc_w = _sanitize_and_normalize_weights(title_w_raw, desc_w_raw)
     # hybrid alpha: 0.0 -> keywords only, 1.0 -> embeddings only
-    try:
-        hybrid_alpha = float(request.form.get("hybrid_alpha", 0.5))
-    except Exception:
-        hybrid_alpha = 0.5
+    hybrid_alpha = _sanitize_alpha(request.form.get("hybrid_alpha", 0.5))
+    # sanitize method value
+    method_raw = request.form.get("method", "auto")
+    allowed_methods = {"auto", "keywords", "embeddings", "hybrid"}
+    method = method_raw if method_raw in allowed_methods else "auto"
 
     matches = []
 
