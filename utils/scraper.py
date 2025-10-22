@@ -67,7 +67,10 @@ def write_jobs_to_csv(jobs, csv_path, overwrite=False):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Scrape jobs from a URL and save to sample_jobs.csv')
-    parser.add_argument('url', help='URL to scrape')
+    parser.add_argument('url', nargs='?', help='URL to scrape (not required when using --indeed)')
+    parser.add_argument('--indeed', action='store_true', help='Use Indeed search scraper (provide --query and optional --loc)')
+    parser.add_argument('--query', help='Search query for Indeed (e.g., "data engineer")')
+    parser.add_argument('--loc', default='', help='Location for Indeed search (e.g., "New York, NY")')
     parser.add_argument('--limit', type=int, default=10, help='Max number of jobs to scrape')
     parser.add_argument('--out', default=None, help='Output CSV path (default: project sample_jobs.csv)')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing CSV')
@@ -78,7 +81,51 @@ if __name__ == '__main__':
         import os
         out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sample_jobs.csv')
 
-    jobs = scrape_jobs_from_url(args.url, limit=args.limit)
+    jobs = []
+    if args.indeed:
+        # import locally to avoid hard dependency unless used
+        def scrape_indeed_search(query, location='', limit=10):
+            """Scrape an Indeed search results page for the given query and location.
+            Returns a list of job dicts. This scraper uses public job card selectors and
+            may require updates if Indeed changes their HTML.
+            """
+            search_url = 'https://www.indeed.com/jobs'
+            params = {'q': query, 'l': location}
+            try:
+                r = requests.get(search_url, params=params, timeout=10, headers={'User-Agent': 'ai-job-match-bot/1.0'})
+                r.raise_for_status()
+            except Exception as e:
+                print(f'Failed to fetch Indeed search: {e}')
+                return []
+            s = BeautifulSoup(r.text, 'html.parser')
+            cards = s.select('div.jobsearch-SerpJobCard, div.job_seen_beacon')[:limit]
+            out = []
+            for c in cards:
+                title_el = c.select_one('h2.jobTitle') or c.select_one('.jobTitle')
+                # extract visible title text
+                title = ''
+                if title_el:
+                    title = title_el.get_text(separator=' ', strip=True)
+                snippet = ''
+                sn = c.select_one('.summary, .job-snippet')
+                if sn:
+                    snippet = sn.get_text(separator=' ', strip=True)
+                loc = ''
+                loc_el = c.select_one('.location') or c.select_one('.companyLocation')
+                if loc_el:
+                    loc = loc_el.get_text(separator=' ', strip=True)
+                out.append({'title': title, 'description': snippet, 'location': loc})
+            return out
+
+        if not args.query:
+            print('When using --indeed you must provide --query')
+        else:
+            jobs = scrape_indeed_search(args.query, args.loc, limit=args.limit)
+    else:
+        if not args.url:
+            print('No URL provided')
+        else:
+            jobs = scrape_jobs_from_url(args.url, limit=args.limit)
     if not jobs:
         print('No jobs found or failed to scrape')
     else:
